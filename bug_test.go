@@ -11,6 +11,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/samber/lo"
 
 	"entgo.io/bug/ent"
 	"entgo.io/bug/ent/enttest"
@@ -54,11 +55,66 @@ func TestBugMaria(t *testing.T) {
 	}
 }
 
+func cleanup(ctx context.Context, client *ent.Client) error {
+	if _, err := client.Profile.Delete().Exec(ctx); err != nil {
+		return err
+	}
+
+	if _, err := client.User.Delete().Exec(ctx); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+const parameterLimit = 65536
+const chunkSize = 8192
+
 func test(t *testing.T, client *ent.Client) {
 	ctx := context.Background()
-	client.User.Delete().ExecX(ctx)
-	client.User.Create().SetName("Ariel").SetAge(30).ExecX(ctx)
-	if n := client.User.Query().CountX(ctx); n != 1 {
-		t.Errorf("unexpected number of users: %d", n)
+
+	// Clean up old data
+	if err := cleanup(ctx, client); err != nil {
+		t.Error("creating users failed", err)
+	}
+
+	// Create builders for all users
+	users := lo.Times(parameterLimit, func(index int) *ent.UserCreate {
+		return client.User.Create().
+			SetID(index + 1).
+			SetUsername(fmt.Sprintf("user-%d", index))
+	})
+
+	// Create users using a bulk insert operation
+	for _, chunk := range lo.Chunk(users, chunkSize) {
+		if err := client.User.CreateBulk(chunk...).Exec(ctx); err != nil {
+			t.Error("creating users failed", err)
+		}
+	}
+
+	// Create builders for all profiles
+	profiles := lo.Times(parameterLimit, func(index int) *ent.ProfileCreate {
+		return client.Profile.Create().
+			SetID(index + 1).
+			SetUserID(index + 1).
+			SetFirstname(fmt.Sprintf("firstname-%d", index)).
+			SetLastname(fmt.Sprintf("lastname-%d", index))
+	})
+
+	// Create profiles using a bulk insert operation
+	for _, chunk := range lo.Chunk(profiles, chunkSize) {
+		if err := client.Profile.CreateBulk(chunk...).Exec(ctx); err != nil {
+			t.Error("creating profiles failed", err)
+		}
+	}
+
+	// Query all users with profiles. This will fail as we have more than 65535 parameters.
+	_, err := client.Debug().User.Query().
+		WithProfile().
+		All(ctx)
+
+	// Check if there was an error
+	if err != nil {
+		t.Error("querying users failed", err)
 	}
 }
