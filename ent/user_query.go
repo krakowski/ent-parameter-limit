@@ -15,6 +15,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/lib/pq"
 )
 
 // UserQuery is the builder for querying User entities.
@@ -411,7 +412,9 @@ func (uq *UserQuery) loadProfile(ctx context.Context, query *ProfileQuery, nodes
 	}
 	query.withFKs = true
 	query.Where(predicate.Profile(func(s *sql.Selector) {
-		s.Where(sql.InValues(s.C(user.ProfileColumn), fks...))
+		s.Where(sql.P(func(b *sql.Builder) {
+			b.Ident(s.C(user.ProfileColumn)).WriteOp(sql.OpEQ).WriteString("ANY").Wrap(func(b *sql.Builder) { b.Arg(pq.Array(fks)) })
+		}))
 	}))
 	neighbors, err := query.All(ctx)
 	if err != nil {
